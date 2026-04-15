@@ -4,6 +4,7 @@
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -13,7 +14,6 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
-  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -24,11 +24,11 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { OneCLI } from '@onecli-sh/sdk';
+import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
-
-const onecli = new OneCLI({ url: ONECLI_URL });
+import { getOutlookAccessToken } from './outlook-token.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -79,7 +79,7 @@ function buildVolumeMounts(
     });
 
     // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the OneCLI gateway, never exposed to containers.
+    // Credentials are injected via env vars, never exposed directly to containers.
     const envFile = path.join(projectRoot, '.env');
     if (fs.existsSync(envFile)) {
       mounts.push({
@@ -184,6 +184,33 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Mount tool scripts from container/skills/ onto PATH so agents can call them directly
+  const skillBins: Array<{ skill: string; bin: string }> = [
+    { skill: 'basecamp', bin: 'basecamp' },
+    { skill: 'outlook', bin: 'outlook' },
+  ];
+  for (const { skill, bin } of skillBins) {
+    const hostBin = path.join(process.cwd(), 'container', 'skills', skill, bin);
+    if (fs.existsSync(hostBin)) {
+      mounts.push({
+        hostPath: hostBin,
+        containerPath: `/usr/local/bin/${bin}`,
+        readonly: true,
+      });
+    }
+  }
+
+  // Gmail credentials directory (for Gmail MCP inside the container)
+  const homeDir = os.homedir();
+  const gmailDir = path.join(homeDir, '.gmail-mcp');
+  if (fs.existsSync(gmailDir)) {
+    mounts.push({
+      hostPath: gmailDir,
+      containerPath: '/home/node/.gmail-mcp',
+      readonly: false, // MCP may need to refresh OAuth tokens
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -242,33 +269,45 @@ function buildVolumeMounts(
   return mounts;
 }
 
-async function buildContainerArgs(
+function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  agentIdentifier?: string,
-): Promise<string[]> {
+  extraEnv: Record<string, string> = {},
+): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
-  } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
-    );
+  // Inject credential proxy env if available
+  const authMode = detectAuthMode();
+  if (authMode) {
+    args.push('-e', `CREDENTIAL_PROXY_MODE=${authMode}`);
   }
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
+
+  // Inject Basecamp credentials so the bc skill can make API calls
+  const basecampKeys = [
+    'BASECAMP_CLIENT_ID',
+    'BASECAMP_CLIENT_SECRET',
+    'BASECAMP_ACCOUNT_ID',
+    'BASECAMP_ACCESS_TOKEN',
+    'BASECAMP_REFRESH_TOKEN',
+    'BASECAMP_TOKEN_EXPIRES_AT',
+  ];
+  const basecampEnv = readEnvFile(basecampKeys);
+  for (const key of basecampKeys) {
+    if (basecampEnv[key]) {
+      args.push('-e', `${key}=${basecampEnv[key]}`);
+    }
+  }
+
+  // Inject extra env vars (e.g. refreshed Outlook access token)
+  for (const [key, value] of Object.entries(extraEnv)) {
+    args.push('-e', `${key}=${value}`);
+  }
 
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
@@ -307,15 +346,24 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
-  const containerArgs = await buildContainerArgs(
-    mounts,
-    containerName,
-    agentIdentifier,
-  );
+
+  // Refresh Outlook token before spawn so the container sees a valid token
+  const extraEnv: Record<string, string> = {};
+  const outlookToken = await getOutlookAccessToken();
+  if (outlookToken) {
+    extraEnv['OUTLOOK_ACCESS_TOKEN'] = outlookToken;
+  }
+
+  // Inject Composio credentials so the Composio MCP server loads inside the container
+  const { COMPOSIO_API_KEY, COMPOSIO_CUSTOMER_ID } = readEnvFile([
+    'COMPOSIO_API_KEY',
+    'COMPOSIO_CUSTOMER_ID',
+  ]);
+  if (COMPOSIO_API_KEY) extraEnv['COMPOSIO_API_KEY'] = COMPOSIO_API_KEY;
+  if (COMPOSIO_CUSTOMER_ID)
+    extraEnv['COMPOSIO_CUSTOMER_ID'] = COMPOSIO_CUSTOMER_ID;
+
+  const containerArgs = buildContainerArgs(mounts, containerName, extraEnv);
 
   logger.debug(
     {

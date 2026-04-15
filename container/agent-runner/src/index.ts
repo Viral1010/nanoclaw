@@ -469,6 +469,8 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
+        'mcp__gmail__*',
+        'mcp__composio__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -484,6 +486,16 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        gmail: {
+          command: 'npx',
+          args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+        },
+        ...(process.env.COMPOSIO_API_KEY && process.env.COMPOSIO_CUSTOMER_ID ? {
+          composio: {
+            type: 'http' as const,
+            url: `https://mcp.composio.dev/partner/composio/claude/mcp?api_key=${process.env.COMPOSIO_API_KEY}&customerId=${process.env.COMPOSIO_CUSTOMER_ID}&include_composio_helper_actions=true`,
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [
