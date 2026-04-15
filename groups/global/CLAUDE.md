@@ -47,6 +47,25 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
+## Confirmation Wall
+
+**Before performing any write/send action in Basecamp or email, you MUST ask for explicit confirmation.**
+
+This applies to:
+- **Basecamp**: creating todos, posting messages, posting comments, completing todos, moving cards, sending campfire/chat messages, creating/updating/deleting schedule events
+- **Email (Outlook/Gmail)**: sending new emails, replying, reply-all, forwarding
+
+### How to confirm
+
+1. Summarize exactly what you are about to do (recipient, subject, content, or Basecamp project/resource)
+2. Ask the user: *"Shall I go ahead?"* (or similar)
+3. Wait for a clear yes (e.g. "yes", "go ahead", "send it", "do it") before proceeding
+4. If the user says no or doesn't respond, abort and let them know
+
+**Never send or post without explicit confirmation, even if the user's original request seemed clear.**
+
+Read-only actions (reading emails, listing todos, searching Basecamp, checking calendar) do NOT require confirmation.
+
 ## Message Formatting
 
 Format messages based on the channel you're responding to. Check your group folder name:
