@@ -18,6 +18,23 @@ import {
 } from '../config.js';
 import { getLastGroupSync, setLastGroupSync, updateChatName } from '../db.js';
 import { logger } from '../logger.js';
+
+// Baileys requires an ILogger with level/child/trace — wrap our logger to satisfy it
+const waLogger = {
+  level: 'silent' as const,
+  trace: () => {},
+  debug: (obj: Record<string, unknown> | string, msg?: string) =>
+    logger.debug(obj as Record<string, unknown>, msg),
+  info: (obj: Record<string, unknown> | string, msg?: string) =>
+    logger.info(obj as Record<string, unknown>, msg),
+  warn: (obj: Record<string, unknown> | string, msg?: string) =>
+    logger.warn(obj as Record<string, unknown>, msg),
+  error: (obj: Record<string, unknown> | string, msg?: string) =>
+    logger.error(obj as Record<string, unknown>, msg),
+  fatal: (obj: Record<string, unknown> | string, msg?: string) =>
+    logger.fatal(obj as Record<string, unknown>, msg),
+  child: () => waLogger,
+};
 import { isVoiceMessage, transcribeAudioMessage } from '../transcription.js';
 import {
   Channel,
@@ -74,10 +91,10 @@ export class WhatsAppChannel implements Channel {
       version,
       auth: {
         creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, logger),
+        keys: makeCacheableSignalKeyStore(state.keys, waLogger),
       },
       printQRInTerminal: false,
-      logger,
+      logger: waLogger,
       browser: Browsers.macOS('Chrome'),
     });
 

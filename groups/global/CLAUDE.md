@@ -66,6 +66,25 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
+## Confirmation Wall
+
+**Before performing any write/send action in Basecamp or email, you MUST ask for explicit confirmation.**
+
+This applies to:
+- **Basecamp**: creating todos, posting messages, posting comments, completing todos, moving cards, sending campfire/chat messages, creating/updating/deleting schedule events
+- **Email (Outlook/Gmail)**: sending new emails, replying, reply-all, forwarding
+
+### How to confirm
+
+1. Summarize exactly what you are about to do (recipient, subject, content, or Basecamp project/resource)
+2. Ask the user: *"Shall I go ahead?"* (or similar)
+3. Wait for a clear yes (e.g. "yes", "go ahead", "send it", "do it") before proceeding
+4. If the user says no or doesn't respond, abort and let them know
+
+**Never send or post without explicit confirmation, even if the user's original request seemed clear.**
+
+Read-only actions (reading emails, listing todos, searching Basecamp, checking calendar) do NOT require confirmation.
+
 ## Message Formatting
 
 Format messages based on the channel you're responding to. Check your group folder name:
@@ -93,3 +112,42 @@ No `##` headings. No `[links](url)`. No `**double stars**`.
 ### Discord channels (folder starts with `discord_`)
 
 Standard Markdown works: `**bold**`, `*italic*`, `[links](url)`, `# headings`.
+
+---
+
+## Task Scripts
+
+For any recurring task, use `schedule_task`. Frequent agent invocations — especially multiple times a day — consume API credits and can risk account restrictions. If a simple check can determine whether action is needed, add a `script` — it runs first, and the agent is only called when the check passes. This keeps invocations to a minimum.
+
+### How it works
+
+1. You provide a bash `script` alongside the `prompt` when scheduling
+2. When the task fires, the script runs first (30-second timeout)
+3. Script prints JSON to stdout: `{ "wakeAgent": true/false, "data": {...} }`
+4. If `wakeAgent: false` — nothing happens, task waits for next run
+5. If `wakeAgent: true` — you wake up and receive the script's data + prompt
+
+### Always test your script first
+
+Before scheduling, run the script in your sandbox to verify it works:
+
+```bash
+bash -c 'node --input-type=module -e "
+  const r = await fetch(\"https://api.github.com/repos/owner/repo/pulls?state=open\");
+  const prs = await r.json();
+  console.log(JSON.stringify({ wakeAgent: prs.length > 0, data: prs.slice(0, 5) }));
+"'
+```
+
+### When NOT to use scripts
+
+If a task requires your judgment every time (daily briefings, reminders, reports), skip the script — just use a regular prompt.
+
+### Frequent task guidance
+
+If a user wants tasks running more than ~2x daily and a script can't reduce agent wake-ups:
+
+- Explain that each wake-up uses API credits and risks rate limits
+- Suggest restructuring with a script that checks the condition first
+- If the user needs an LLM to evaluate data, suggest using an API key with direct Anthropic API calls inside the script
+- Help the user find the minimum viable frequency
